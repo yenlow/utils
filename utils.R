@@ -1,66 +1,77 @@
-# Functions:
-# 	1. installnewpackage: installnewpackage ONLY if they have not been installed
-# 	2. lsos: lists objects in memory, sorted by size
-#   3. gci: gc() until memory is clean
-# 
-# 21-Jan-14 Yen Low
-#
-# To use:
-# RScriptPath=Sys.getenv("RScriptPath") #Rscriptpath is an environment variable, path="/mnt/hgfs/Dropbox"
-# source(paste(RScriptPath,"/scripts/R/utils.R",sep=""))
-###############################################################################
+# Title     : utilities to partially source R scripts by regex/lines, save graphics etc
+# Created by: yensia-low
+# Created on: 07-Feb-20
 
-############### installnewpackage ################# 
-#Check if required packages have been installed.
-# If not, install the missing packages
-
-#EXAMPLES:
-##required packages are "caret","ROCR","boot"
-#reqpackages=c("caret","ROCR","boot")
-#installnewpackage(reqpackages)
-
-installnewpackage<-function(reqpackages){
-	newpackages=reqpackages[!(reqpackages %in% installed.packages()[,"Package"])]
-	if(length(newpackages)>0) install.packages(newpackages)
+# https://stackoverflow.com/questions/26245554/execute-a-set-of-lines-from-another-r-file
+sourcePartial <- function(file,startTag='#from here',endTag=NULL, startskip=0, endskip=0) {
+  lines = scan(file, what=character(), sep="\n", quiet=TRUE)
+  st = grep(startTag,lines)
+  en = ifelse(is.null(endTag), length(lines), grep(endTag,lines))
+  tc = textConnection(lines[(st+startskip):(en-endskip)])
+  source(tc)
+  close(tc)
 }
 
+saveGraphics <- function(file, outdir="output/plots",
+                         startTag='^png\\(|^pdf\\(',
+                         endTag="^dev\\.off\\(\\)$") {
+  lines = scan(file, what=character(), sep="\n", quiet=TRUE)
 
-#################### lsos #######################
-# Function for listing objects in memory, sorted by size
-# From http://stackoverflow.com/questions/1358003/tricks-to-manage-the-available-memory-in-an-r-session
+  #find the lines for saving graphics using the graphics device
+  st = grep(startTag,lines)
+  en = grep(endTag,lines)
+  indices = data.frame(st,en)
 
-# improved list of objects
-.ls.objects <- function (pos = 1, pattern, order.by,
-		decreasing=FALSE, head=FALSE, n=5) {
-	napply <- function(names, fn) sapply(names, function(x)
-					fn(get(x, pos = pos)))
-	names <- ls(pos = pos, pattern = pattern)
-	obj.class <- napply(names, function(x) as.character(class(x))[1])
-	obj.mode <- napply(names, mode)
-	obj.type <- ifelse(is.na(obj.class), obj.mode, obj.class)
-	obj.size <- napply(names, object.size)
-	obj.dim <- t(napply(names, function(x)
-						as.numeric(dim(x))[1:2]))
-	vec <- is.na(obj.dim)[, 1] & (obj.type != "function")
-	obj.dim[vec, 1] <- napply(names, length)[vec]
-	out <- data.frame(obj.type, obj.size, obj.dim)
-	names(out) <- c("Type", "Size", "Rows", "Columns")
-	if (!missing(order.by))
-		out <- out[order(out[[order.by]], decreasing=decreasing), ]
-	if (head)
-		out <- head(out, n)
-	out
+  graphicsLinesAll = c()
+  outpaths = c()
+  for(i in 1:nrow(indices)){
+    ##gsub the original path with outdir
+    replaceStr = paste0('("', outdir,'/')
+    lineStart = gsub('\\(\\"[[:alnum:]_]+/', replaceStr, lines[indices$st[i]])
+    outpath  = regmatches(lineStart,regexpr('\\"(.*?)\\"',lineStart))
+    #explicitly print the object so they will be rendered and saved
+    lineb4devoff = paste0("print(",lines[indices$en[i]-1],")")
+
+    #these will the be new lines that will be sourced
+    graphicsLines = lines[indices$st[i]:indices$en[i]]
+    graphicsLines[1] = lineStart
+    graphicsLines[length(graphicsLines)-1] = lineb4devoff
+
+    graphicsLinesAll = c(graphicsLinesAll, graphicsLines)
+    outpaths = c(outpaths, outpath)
+  }
+
+    tc = textConnection(graphicsLinesAll)
+    source(tc)
+    close(tc)
+    print("Graphics were saved to:")
+    print(outpaths)
 }
-# shorthand
-lsos <- function(..., n=10) {
-	.ls.objects(..., order.by="Size", decreasing=TRUE, head=TRUE, n=n)
+
+# Returns middle of a range, e.g. 21-30 => 25
+mid <- function(x) floor(mean(as.numeric(x)))
+
+ageChecker <- function(v){
+  #strip white spaces
+  v = gsub("\\s", "", v)
+
+  #print frequency of invalid ages
+  badAge = grep("(^\\d{1,3}$)", v, value=TRUE, invert=TRUE)
+  print("Invalid ages:")
+  print(table(badAge,useNA="ifany"))
+
+  #change ranges to medians
+  ageRangeID = which(grepl("\\d+-\\d+", v))
+  v[ageRangeID] = as.numeric(lapply(strsplit(v[ageRangeID],'-'),mid))
+
+  #change 20s to 25
+  v = gsub("\\ds$", "5", v)
+  #drop non-numbers or empty strings
+  v = gsub("^\\D+$|''", NA, v)
+  v = floor(as.numeric(v))
+
+  #print cleaned up dates
+  print("Cleaned up ages:")
+  print(table(v,useNA="ifany"))
 }
 
-
-################ collectGarbage ############################
-## The following function collects garbage until the memory is clean.
-## Usage: 1. immediately call this function after you call a function or
-##        2. rm()
-gci <- function(){
-	while (gc()[2,4] != gc()[2,4]){}
-}
